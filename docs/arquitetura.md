@@ -721,3 +721,266 @@ Sem volumes, SLA ou orçamento, a escolha deve permanecer em aberto.
 | Java 21, Spring Boot 3.x, PostgreSQL e Maven | AS-07 | Restricao/decisao preexistente |
 | Lock, watermark, idempotencia, deduplicacao e auditoria | Necessarios para satisfazer o processamento incremental sem contaminar online; sem requisito detalhado | Proposta a validar |
 | LGPD, observabilidade e custo | AS-05, AS-06 e riscos identificados; sem RNFs ou métricas | Preocupações arquiteturais, nao metas |
+
+## 20. Avaliação ATAM independente
+
+### 20.1 Escopo e base da avaliação
+
+Esta seção registra uma avaliação independente baseada no método ATAM (Architecture
+Tradeoff Analysis Method). Foram considerados integralmente os seguintes artefatos:
+
+- `docs/prd.md`, com as personas do produto;
+- `docs/arquitetura.md`, incluindo fatos, requisitos arquiteturalmente
+	significativos, drivers, propostas, invariantes, riscos e perguntas abertas;
+- `docs/plano-de-teste.md`, cuja estratégia ainda está marcada como `TODO`;
+- as personas dos agentes em `.aiox-core/development/agents/` e seus arquivos
+	`MEMORY.md`, considerados como regras de trabalho e governança, não como
+	requisitos funcionais do Foot Fanatics.
+
+A avaliação não substitui requisitos de produto, não aprova decisões ainda em
+aberto e não representa evidência de que componentes ou controles já estejam
+implementados.
+
+### 20.2 Veredito
+
+**Resultado: CONCERNS fortes; arquitetura não aprovada para implementação
+produtiva neste estado.**
+
+A arquitetura fornece uma boa base de descoberta: explicita suas lacunas,
+separa o fluxo online do batch e registra invariantes relevantes para dados
+incrementais, promoção de modelos e recuperação. Entretanto, ainda não há
+requisitos mensuráveis, contratos fechados, decisões arquiteturais justificadas
+ou estratégia de testes suficiente para demonstrar segurança, confiabilidade e
+correção.
+
+O parecer permite evolução da documentação e prototipação controlada, mas o
+início de implementação produtiva deve aguardar o tratamento dos riscos
+críticos e altos desta seção.
+
+### 20.3 Pontos fortes observados
+
+- A separação entre API Online e Pipeline Batch reduz o risco de interferência
+	entre treinamento e acesso dos usuários.
+- O uso combinado de `watermark`, `runId`, checkpoint, lock, idempotência e
+	linhagem endereça corretamente os riscos de reprocessamento.
+- A promoção condicionada a um gate e a preservação do modelo anterior
+	favorecem rollback controlado.
+- A arquitetura distingue fatos, restrições, propostas, suposições e perguntas
+	abertas, evitando apresentar hipóteses como decisões confirmadas.
+- As três personas do produto estão coerentes com os drivers de conteúdo,
+	assinatura e recuperação de acesso.
+- Logs correlacionados, auditoria e preocupações de LGPD foram identificados
+	nos pontos em que podem influenciar a solução.
+
+### 20.4 Riscos arquiteturais prioritários
+
+#### R1. Requisitos insuficientes para validar a arquitetura
+
+**Severidade: crítica.**
+
+O PRD contém personas, mas não contém requisitos funcionais, requisitos não
+funcionais, regras de negócio ou métricas. Portanto, não é possível provar que
+a solução atende ao produto.
+
+Consequências potenciais:
+
+- ausência de critérios objetivos para aprovar ou rejeitar decisões
+	arquiteturais;
+- impossibilidade de medir disponibilidade, latência, segurança ou sucesso do
+	batch;
+- risco de implementar componentes que não correspondem a uma necessidade
+	confirmada.
+
+Mitigação requerida: definir requisitos identificados, critérios de aceitação,
+cenários de qualidade e métricas antes da implementação produtiva.
+
+#### R2. Atomicidade incompleta entre promoção e checkpoint
+
+**Severidade: alta.**
+
+A arquitetura exige que promoção do modelo, auditoria e avanço do watermark
+ocorram de forma atômica. Porém, esses elementos podem estar em registros,
+serviços ou armazenamentos diferentes.
+
+Se a promoção for concluída e o checkpoint falhar, a próxima execução poderá
+reprocessar os dados. Se o checkpoint avançar antes da promoção, dados poderão
+ser considerados processados sem que o modelo correspondente esteja ativo.
+
+Mitigação requerida: escolher e documentar uma estratégia entre transação única
+no mesmo armazenamento, protocolo de compensação, máquina de estados com
+operações idempotentes ou publicação por alias/versionamento com reconciliação.
+
+#### R3. Fonte e semântica da assinatura não definidas
+
+**Severidade: alta.**
+
+A autorização premium depende de uma Fonte de Assinatura ainda indefinida. Não
+há regras para estados da assinatura, atraso de sincronização, indisponibilidade
+da fonte, revogação, cache ou comportamento degradado.
+
+Consequências potenciais:
+
+- concessão indevida de conteúdo premium;
+- bloqueio de assinantes legítimos;
+- respostas inconsistentes entre sessões ou requisições.
+
+Mitigação requerida: definir a fonte de verdade, estados válidos, política de
+cache, tolerância a falhas e comportamento de autorização em cada estado.
+
+#### R4. Segurança de identidade ainda não é verificável
+
+**Severidade: alta.**
+
+Login, renovação e recuperação são responsabilidades descritas, mas não há
+protocolo, política de sessão, proteção contra abuso, mecanismo de recuperação,
+MFA, rate limiting, armazenamento de credenciais, expiração ou auditoria
+definidos.
+
+A exigência de acesso seguro não possui cenário testável nem critério de
+aceitação.
+
+Mitigação requerida: especificar autenticação, autorização, ciclo de vida da
+sessão, recuperação, proteção de credenciais, limites de tentativa, gestão de
+segredos, auditoria e metas de segurança.
+
+#### R5. O modelo treinado não possui consumidor definido
+
+**Severidade: alta.**
+
+A arquitetura assume modelo ativo, registro, promoção e rollback, mas não
+identifica qual funcionalidade online utiliza o modelo.
+
+Isso cria risco de complexidade sem valor de negócio e impede definir métrica
+do modelo, SLA de atualização, comportamento em caso de indisponibilidade,
+contrato de inferência e critério de rollback.
+
+Mitigação requerida: identificar a funcionalidade consumidora e seu contrato,
+ou remover o pipeline de modelo do escopo até existir uma necessidade
+confirmada.
+
+#### R6. Dados novos e dados tardios permanecem indefinidos
+
+**Severidade: alta.**
+
+A regra de usar somente dados novos depende de uma definição operacional de
+novidade. Ainda não foi decidido se o watermark será baseado em tempo de evento,
+tempo de observação ou sequência monotônica da origem.
+
+Sem essa decisão, não há garantia contra omissão, duplicação ou reprocessamento
+incorreto.
+
+Mitigação requerida: definir origem, campo de ordenação, semântica de inclusão e
+exclusão dos limites, tolerância a atraso, chave de deduplicação e comportamento
+para dados tardios.
+
+#### R7. Qualidade e operação não são mensuráveis
+
+**Severidade: alta.**
+
+O plano de teste está integralmente como `TODO`. Também faltam horário, fuso,
+timeout, retry, duração máxima, volume, concorrência, SLA, alertas e retenção.
+
+Não existe base para afirmar que o batch terminará dentro da janela diária ou
+que o online permanecerá disponível durante o processamento.
+
+Mitigação requerida: completar o plano de teste e definir metas operacionais,
+critérios de entrada e saída, ambientes, cobertura, cenários de falha e
+critérios de prontidão.
+
+### 20.5 Cenários de qualidade prioritários
+
+Os seguintes cenários devem ser transformados em requisitos verificáveis antes
+do próximo gate arquitetural:
+
+| ID | Cenário | Atributos envolvidos | Resultado esperado |
+| --- | --- | --- | --- |
+| ATAM-QS-01 | Um torcedor casual consulta conteúdo gratuito. | Acesso correto, usabilidade, desempenho | Conteúdo gratuito é entregue sem assinatura e sem barreira indevida. |
+| ATAM-QS-02 | Um assinante com assinatura válida consulta conteúdo premium. | Autorização, disponibilidade, confiabilidade | Conteúdo premium é liberado conforme a fonte de verdade definida. |
+| ATAM-QS-03 | Um usuário sem assinatura válida consulta conteúdo premium. | Segurança, autorização, experiência | Acesso é negado de forma consistente, sem exposição do conteúdo protegido. |
+| ATAM-QS-04 | A fonte de assinatura fica indisponível durante uma consulta. | Disponibilidade, segurança, consistência | O comportamento degradado é previsível, auditável e não concede acesso indevido. |
+| ATAM-QS-05 | Um usuário faz login, renova a sessão e recupera o acesso. | Segurança, confiabilidade, recuperabilidade | Cada operação segue limites, expiração e evidências de auditoria definidos. |
+| ATAM-QS-06 | Duas execuções batch são disparadas simultaneamente. | Concorrência, integridade, observabilidade | Uma execução é processada e a outra é encerrada ou marcada como skip sem alterar estado. |
+| ATAM-QS-07 | Uma etapa batch falha após a leitura e antes da promoção. | Recuperabilidade, integridade, idempotência | O watermark e o modelo ativo permanecem anteriores; a execução pode ser reprocessada. |
+| ATAM-QS-08 | O gate do candidato reprova o modelo. | Segurança operacional, confiabilidade | O candidato não é promovido e o modelo ativo anterior permanece disponível. |
+| ATAM-QS-09 | A promoção é concluída, mas a atualização do checkpoint falha. | Integridade, consistência, recuperação | O sistema reconcilia o estado sem perda de dados nem dupla promoção. |
+| ATAM-QS-10 | Existem dados tardios após o watermark. | Atualidade, completude, deduplicação | A política definida captura, rejeita ou reprocessa os dados de forma rastreável. |
+
+### 20.6 Pontos de sensibilidade
+
+As seguintes decisões podem alterar significativamente a arquitetura e devem
+ser tratadas como pontos de sensibilidade:
+
+1. Fonte, estados e consistência da assinatura.
+2. Definição do watermark e política para dados tardios.
+3. Critérios e métricas do gate de modelo.
+4. Armazenamento do registro de modelos e do modelo ativo.
+5. Protocolo de autenticação e ciclo de vida da sessão.
+6. Topologia de execução do batch e mecanismo de lock.
+7. Necessidade real do modelo no fluxo online.
+8. Política para dados pessoais usados no treinamento.
+
+### 20.7 Trade-offs ainda não resolvidos
+
+As alternativas abaixo foram identificadas, mas ainda não há critérios
+documentados para selecionar uma opção:
+
+- monólito modular versus múltiplos serviços implantáveis;
+- consulta síncrona à assinatura versus réplica local;
+- banco compartilhado entre online e batch versus armazenamento isolado;
+- lock transacional versus lock distribuído;
+- retry local versus nova execução agendada;
+- validação histórica versus validação temporal do modelo;
+- referência atômica simples versus alias versionado.
+
+Cada trade-off deve ser fechado por uma decisão registrada em ADR, com contexto,
+alternativas consideradas, decisão, consequências e requisitos que a motivam.
+
+### 20.8 Riscos de governança nas personas dos agentes
+
+A leitura das personas dos agentes e dos respectivos arquivos de memória
+identificou os seguintes riscos de processo:
+
+- `architect.md`, `dev.md` e `devops.md` utilizam referências a
+	`@github-devops`, enquanto a autoridade do repositório define `@devops`.
+	Essa diferença pode gerar delegação incorreta de operações remotas.
+- A persona de QA se declara consultiva, mas também define bloqueio de
+	conclusão para problemas críticos e altos. A autoridade de aprovação deve ser
+	explicitamente harmonizada.
+- A persona de desenvolvimento possui pré-condições conflitantes sobre stories
+	em estado `Draft`, o que pode gerar início prematuro ou bloqueio indevido.
+- As memórias dos agentes assumem Node.js, CommonJS, Jest, Supabase e Vercel,
+	enquanto a arquitetura do produto declara Java 21, Spring Boot 3.x,
+	PostgreSQL e Maven. Aplicar essas memórias sem adaptação pode causar deriva
+	tecnológica e de fluxo.
+
+Mitigação requerida: alinhar nomes de agentes, autoridade de operações,
+transições de processo e stack das memórias ao contexto real do produto, sem
+misturar regras do framework com requisitos do Foot Fanatics.
+
+### 20.9 Recomendações para o próximo gate
+
+Antes de iniciar a implementação produtiva:
+
+1. Criar requisitos funcionais e não funcionais identificados, com critérios de
+	 aceitação mensuráveis.
+2. Definir contratos de identidade, sessão, assinatura e conteúdo premium.
+3. Decidir o consumidor real do modelo ou remover temporariamente o pipeline
+	 de ML do escopo.
+4. Fechar a semântica do watermark, dados tardios, idempotência e recuperação.
+5. Escolher o mecanismo de atomicidade entre promoção, auditoria e checkpoint.
+6. Completar `docs/plano-de-teste.md` com cenários de segurança, falha parcial,
+	 concorrência, recuperação, desempenho e critérios de saída.
+7. Criar ADRs para stack, topologia, persistência, lock, registro de modelos e
+	 integração de assinatura.
+8. Alinhar as personas dos agentes à autoridade e à stack deste produto.
+
+### 20.10 Conclusão da avaliação
+
+A documentação demonstra boa consciência arquitetural, especialmente ao
+separar fatos de hipóteses e ao explicitar invariantes do processamento
+incremental. Entretanto, neste momento ela descreve principalmente uma proposta
+e um conjunto de riscos, e não uma arquitetura pronta para implementação
+produtiva.
+
+O próximo gate recomendado é: **não iniciar implementação produtiva até fechar
+os requisitos e os pontos de sensibilidade críticos desta avaliação**.
