@@ -984,3 +984,645 @@ produtiva.
 
 O próximo gate recomendado é: **não iniciar implementação produtiva até fechar
 os requisitos e os pontos de sensibilidade críticos desta avaliação**.
+
+## 21. Painel revisor multidisciplinar
+
+### 21.1 Mandato e regra de decisão
+
+Esta seção registra uma segunda revisão independente, conduzida por seis papéis:
+Arquiteto de Software, Especialista em Dados/ML, Segurança e LGPD, Operações/SRE,
+Custos/FinOps e Facilitador ATAM.
+
+O painel não altera personas nem requisitos. Quando uma recomendação depende de
+informação ausente, ela permanece explicitamente aberta. Quando há discordância,
+o desacordo, a resolução e o ponto que continua pendente são registrados. As
+decisões deste painel são propostas documentais até que os requisitos e os
+experimentos correspondentes sejam aprovados.
+
+### 21.2 Arquiteto de Software
+
+**Objeções e riscos**
+
+- A proposta mistura responsabilidades de contêiner, componente e serviço nos
+	diagramas C4. No diagrama de contêineres, `Servico de Conteudo`, `Servico de
+	Identidade e Sessao` e `Servico de Assinatura e Autorizacao` são descritos como
+	componentes da API, mas aparecem como `Container`.
+- A relação do sistema Foot Fanatics com a Origem de Dados Novos no contexto C4
+	pode ser lida como dependência do fluxo online, embora o texto declare que o
+	online não depende do batch.
+- A atomicidade entre promoção, auditoria e checkpoint não pode ser presumida
+	enquanto registro de modelos e checkpoint não tiverem um mecanismo comum ou
+	um protocolo de reconciliação.
+- O modelo ativo e o registry adicionam complexidade sem consumidor online
+	confirmado.
+
+**Perguntas**
+
+1. O sistema será um monólito modular ou haverá implantação independente dos
+	 serviços propostos?
+2. O modelo treinado será consumido por qual funcionalidade e com qual contrato?
+3. Qual armazenamento suporta a referência ativa, o histórico e a operação de
+	 rollback?
+4. A relação com a Origem de Dados Novos representa somente o batch?
+
+**Recomendações**
+
+- Redesenhar o C4 em níveis consistentes: API Online e Pipeline Batch como
+	contêineres; serviços internos como componentes da API; etapas batch como
+	componentes do orquestrador quando não forem implantáveis separadamente.
+- Manter a separação online/batch como invariante de isolamento, mas adiar a
+	decisão de topologia até haver volume, disponibilidade e orçamento.
+- Tornar o contrato de publicação e leitura do modelo explícito somente se um
+	consumidor for confirmado.
+
+**Discordância e resolução**
+
+O arquiteto defende corrigir imediatamente os diagramas C4; o facilitador ATAM
+defende preservar os diagramas históricos para manter rastreabilidade. A
+resolução é manter os diagramas existentes como registro da proposta original,
+adicionar a errata na seção 21.8 e exigir uma versão corrigida antes da
+implementação.
+
+### 21.3 Especialista em Dados/ML
+
+**Objeções e riscos**
+
+- “Somente dados novos” ainda não possui definição operacional, chave de
+	deduplicação ou política para eventos tardios.
+- Treinar ou retreinar diariamente não define alvo, features, algoritmo, janela
+	de validação, baseline ou limiar de qualidade.
+- A validação pode aprovar um modelo tecnicamente melhor, mas incompatível com
+	o contrato de inferência ou com dados futuros.
+- A reprodutibilidade é apenas uma intenção enquanto código, dependências,
+	transformação, dataset e configuração não forem versionados conjuntamente.
+- A possibilidade de dados pessoais no treinamento ainda não foi determinada.
+
+**Perguntas**
+
+1. Qual campo da origem define novidade e qual é a semântica dos limites?
+2. Qual é a unidade de deduplicação e como duplicatas são tratadas?
+3. O job sempre treina ou decide entre treino inicial e retreinamento?
+4. Quais métricas, baseline, conjunto de validação e limiares formam o gate?
+5. O lote aceito é materializado e imutável para reexecução?
+
+**Recomendações**
+
+- Definir um contrato de lote contendo origem, identidade, esquema, watermark,
+	transformações e hash ou equivalente de conteúdo.
+- Versionar código, dependências, configuração, dados de treino, transformações,
+	candidato e evidências do gate.
+- Tratar o gate como condição de promoção, não apenas como relatório.
+- Executar experimento de reprocessamento da mesma janela para demonstrar
+	deduplicação, idempotência e reprodutibilidade.
+
+**Discordância e resolução**
+
+O especialista em ML considera prematuro escolher entre watermark por evento e
+por sequência sem conhecer a origem. O arquiteto aceita manter a escolha aberta,
+mas exige que o contrato de lote e a política de falha sejam definidos antes de
+qualquer treino produtivo. A decisão permanece aberta; o contrato mínimo é
+registrado como requisito de experimento no ADR-ML-01.
+
+### 21.4 Segurança e LGPD
+
+**Objeções e riscos**
+
+- “Acesso seguro” não define autenticação, autorização, sessão, recuperação,
+	proteção contra abuso, gestão de segredos ou auditoria.
+- Uma fonte de assinatura indisponível pode levar a fail-open ou fail-closed;
+	a decisão tem impacto direto em segurança e experiência.
+- O treinamento pode ampliar a superfície de exposição se receber dados
+	pessoais ou se metadados e logs carregarem identificadores desnecessários.
+- A arquitetura cita LGPD, mas não define finalidade, base legal, retenção,
+	descarte, direitos do titular ou responsáveis.
+
+**Perguntas**
+
+1. Quais dados pessoais são coletados e quais entram no batch?
+2. Qual é a base legal e a finalidade de cada categoria de dado?
+3. Qual política vale quando a assinatura não pode ser confirmada?
+4. Como são protegidos credenciais, tokens, links de recuperação e logs?
+5. Quais perfis podem ler conta, assinatura, lotes, modelos e auditoria?
+
+**Recomendações**
+
+- Definir uma matriz de acesso separando online, batch, treino, publicação e
+	auditoria.
+- Proibir exposição de credenciais, tokens e dados pessoais desnecessários em
+	logs, candidatos e metadados.
+- Avaliar minimização, pseudonimização ou anonimização antes de confirmar uso
+	de dados pessoais no treinamento.
+- Transformar segurança e LGPD em critérios de aceitação verificáveis.
+
+**Discordância e resolução**
+
+O papel de segurança recomenda fail-closed para autorização quando a fonte não
+responde; o papel de produto observa que isso pode bloquear assinantes válidos.
+Sem uma política de negócio ou SLA, nenhuma opção é aprovada. O conflito fica
+aberto e deve ser resolvido junto com o contrato da assinatura no ADR-SEC-01.
+
+### 21.5 Operações/SRE
+
+**Objeções e riscos**
+
+- “Diariamente, ao final do dia” não informa fuso, horário, duração máxima,
+	janela de manutenção ou comportamento em atraso.
+- Retry, timeout, backoff, retomada e cancelamento são responsabilidades sem
+	parâmetros operacionais.
+- Não há SLO, alertas, canais, responsáveis, retenção de logs ou runbook.
+- O lock impede concorrência lógica, mas a arquitetura não define sua validade,
+	expiração ou recuperação após perda do executor.
+- A falha entre promoção e checkpoint exige reconciliação operacional explícita.
+
+**Perguntas**
+
+1. Qual atraso máximo é aceitável para o treinamento diário?
+2. O que acontece se o job falhar na janela final do dia?
+3. O retry ocorre na mesma execução ou na próxima execução agendada?
+4. Como uma execução presa libera o lock com segurança?
+5. Quais métricas disparam intervenção humana?
+
+**Recomendações**
+
+- Definir estados de execução, timeouts por etapa, retry limitado e política de
+	recuperação por `runId`.
+- Criar reconciliação para estados “promovido sem checkpoint” e “checkpoint sem
+	promoção”, sem assumir transação distribuída inexistente.
+- Separar capacidade e observabilidade do online e do batch, mesmo quando
+	compartilharem o PostgreSQL.
+- Testar falhas injetadas em cada transição do pipeline.
+
+**Discordância e resolução**
+
+SRE prefere retry por nova execução para simplificar estado; o especialista de
+dados aceita retry local para falhas transitórias. A resolução é não escolher
+antes de conhecer a duração da janela e os limites de cada dependência. ADR-SRE-01
+registra a política provisória: retry deve ser limitado, idempotente e observável.
+
+### 21.6 Custos/FinOps
+
+**Objeções e riscos**
+
+- Não há volume, orçamento, crescimento, retenção ou custo-alvo.
+- Lotes imutáveis, versões de modelo, auditoria e logs podem crescer sem limite
+	se a retenção não for definida.
+- Isolar o batch protege o online, mas pode duplicar computação e armazenamento.
+- Compartilhar recursos reduz custo, mas torna a interferência difícil de medir.
+- Um registry externo, lock distribuído ou armazenamento dedicado adiciona
+	dependências e custo sem requisito confirmado.
+
+**Perguntas**
+
+1. Qual é o volume inicial e o crescimento esperado dos dados?
+2. Qual orçamento ou limite de custo orienta a topologia?
+3. Qual retenção é necessária para auditoria, rollback e reprodutibilidade?
+4. Qual custo de atraso ou falha do batch é aceitável?
+
+**Recomendações**
+
+- Comparar cenário compartilhado e isolado por custo, interferência, recuperação
+	e capacidade de observação.
+- Medir consumo do primeiro experimento antes de escolher serviços adicionais.
+- Definir retenção por categoria: dados brutos, lotes, modelos, logs e auditoria.
+- Não introduzir registry ou lock distribuído antes de validar a necessidade.
+
+**Discordância e resolução**
+
+FinOps prefere começar compartilhando recursos; SRE prefere isolamento para
+proteger o online. A resolução é manter ambas as alternativas abertas e exigir
+um experimento de carga com orçamento e limites explícitos antes da decisão
+ADR-FIN-01.
+
+### 21.7 Facilitador ATAM
+
+**Objeções e riscos**
+
+- A árvore de utilidade não estava formalizada, portanto os atributos não tinham
+	prioridade verificável.
+- A matriz ATAM anterior identificava riscos, mas não conectava cada requisito a
+	uma decisão, componente e evidência.
+- As invariantes do batch são fortes, mas parte delas é chamada de atômica sem
+	mecanismo já decidido.
+- O documento mistura fatos confirmados, propostas e perguntas abertas, embora
+	normalmente sinalize essa diferença; isso pode confundir leitores novos.
+
+**Perguntas**
+
+1. Qual risco bloqueia implementação e qual pode ser aceito temporariamente?
+2. Qual evidência transforma cada proposta em decisão aprovada?
+3. Como o painel revisará decisões quando requisitos de produto forem criados?
+
+**Recomendações**
+
+- Adotar a árvore de utilidade abaixo como instrumento de priorização, sem
+	convertê-la automaticamente em RNF.
+- Usar os ADRs desta seção para distinguir decisão proposta, decisão aprovada e
+	questão aberta.
+- Fazer o próximo gate somente após completar a matriz de cobertura e executar
+	os experimentos prioritários.
+
+**Discordância e resolução**
+
+O facilitador propõe um veredito “CONCERNS fortes”; os demais papéis concordam
+	que a documentação é útil para descoberta, mas não para produção. O consenso
+	é manter esse veredito e aceitar apenas prototipação controlada até os riscos
+	críticos serem tratados.
+
+### 21.8 Registro de consistência e correções
+
+As correções abaixo preservam o histórico das seções anteriores e tornam
+explícita a interpretação vigente:
+
+| ID | Observação histórica | Correção/interpretação vigente | Estado |
+| --- | --- | --- | --- |
+| CONS-01 | A relação C4 entre Foot Fanatics e Origem de Dados Novos não distingue online e batch. | A relação pertence ao Pipeline Batch; o fluxo online permanece independente do batch. O diagrama deve ser redesenhado em uma revisão futura. | Corrigido por interpretação; redesenho pendente |
+| CONS-02 | O C4 de contêineres usa `Container` para elementos descritos como componentes da API. | Os elementos são responsabilidades internas da API, não contêineres implantáveis, salvo decisão futura em contrário. | Contradição registrada; correção visual pendente |
+| CONS-03 | O texto exige checkpoint atômico, mas registry, publisher e auditoria não têm armazenamento definido. | “Atômico” passa a significar transação única ou protocolo equivalente com reconciliação comprovada; nenhuma tecnologia é presumida. | Aberto, com invariante preservada |
+| CONS-04 | A seção 10 afirma que nenhum ADR foi encontrado. | A afirmação permanece correta como histórico da avaliação inicial. Os ADRs desta seção são novos registros do painel e não reescrevem aquela constatação. | Resolvido por versionamento documental |
+| CONS-05 | A sequência online mostra retornos de conteúdo e resposta final correlacionada. | O retorno intermediário é interno entre componentes; somente a resposta final é externa ao torcedor. | Corrigido por interpretação |
+| CONS-06 | O modelo ativo aparece como hipótese futura, mas o pipeline descreve promoção e rollback. | O pipeline de modelo é condicional ao consumidor confirmado; até lá, registry e publisher são proposta não aprovada. | Aberto |
+
+### 21.9 Árvore de utilidade ATAM
+
+Esta árvore é uma priorização analítica derivada de AS-01 a AS-07, personas e
+restrição externa. Ela não cria metas quantitativas ausentes.
+
+```text
+Foot Fanatics
+├── Acesso correto ao conteúdo
+│   ├── Conteúdo gratuito acessível sem assinatura [AS-01, AS-02]
+│   ├── Conteúdo premium liberado somente com assinatura válida [AS-03]
+│   └── Classificação de acesso compreensível ao usuário [AS-02]
+├── Acesso seguro à conta
+│   ├── Login funcional [AS-04]
+│   ├── Renovação de sessão confiável [AS-04]
+│   ├── Recuperação de acesso segura [AS-04, AS-05]
+│   └── Proteção contra acesso indevido [AS-05]
+├── Processamento diário confiável
+│   ├── Seleção exclusiva de dados novos [AS-06]
+│   ├── Não duplicação e reprocessamento seguro [AS-06]
+│   ├── Modelo não promovido sem gate [AS-06]
+│   └── Online não interrompido pelo batch [AS-06]
+└── Aderência tecnológica
+		└── Java 21, Spring Boot 3.x, PostgreSQL e Maven [AS-07]
+```
+
+### 21.10 Confirmação dos controles ponta a ponta
+
+| Controle | Situação confirmada pelo painel | Componente/responsabilidade | Lacuna que impede aprovação |
+| --- | --- | --- | --- |
+| Seleção apenas de dados novos | Invariante mantida; seleção posterior ao watermark é proposta de fluxo. | Leitor de Dados Novos | Origem, campo, limites e dados tardios. |
+| Watermark/checkpoint atômico | Requisito de integridade mantido; atomicidade física ou equivalente não decidida. | Checkpoint e Auditoria Batch / Orquestrador | Mecanismo transacional ou reconciliação. |
+| Idempotência/deduplicação | Obrigatória para reprocessamento seguro; contrato ainda não fechado. | Orquestrador / Deduplicador e Validador | Chaves, estado e política de duplicatas. |
+| Lock | Lock antes da leitura do checkpoint é mantido. | Orquestrador Batch | Tipo, expiração, fencing e recuperação. |
+| Retry e recuperação | Retry limitado e associado a etapa/runId é mantido. | Orquestrador Batch | Limites, backoff, retomada e cancelamento. |
+| Qualidade/linhagem | Lote validado, imutável e rastreável é requisito de desenho. | Deduplicador e Validador | Esquema, regras, limiares e armazenamento. |
+| Reprodutibilidade | Identificação de lote, transformações, configuração, código e dependências devem ser preservados. | Trainer / Registry / Auditoria | Empacotamento, hashes e política de retenção. |
+| Validação e gates | Nenhuma promoção sem gate aprovado. | Validador de Candidato | Métricas, baseline, conjunto e limiares. |
+| Versionamento/registry | Candidatos, ativos, evidências e histórico devem ser versionados. | Registro de Modelos | Tecnologia, formato e retenção. |
+| Promoção e rollback | Promoção somente de aprovado; modelo anterior preservado. | Publicador / Registro | Atomicidade, reconciliação e teste de rollback. |
+| Observabilidade | `correlationId`, `runId`, etapas, métricas e auditoria são necessários. | API / Batch / Checkpoint e Auditoria | Destino, retenção, alertas e responsáveis. |
+| Segurança/LGPD | Minimização, separação de privilégios, proteção de segredos e descarte são preocupações confirmadas. | Identidade, Autorização, Batch e Auditoria | Requisitos, base legal, matriz e prazos. |
+| Custos e isolamento online/batch | Isolamento é driver; custo e topologia seguem em alternativas. | API Online / Pipeline Batch / Infraestrutura | Volumes, orçamento e experimento de carga. |
+
+## 22. ADRs do painel revisor
+
+Os ADRs abaixo são registros do painel. O status `Proposed` significa que a
+decisão orienta a próxima especificação, mas ainda não autoriza implementação
+produtiva sem os requisitos e evidências indicados.
+
+### ADR-ATAM-01 — Separar fluxo online e pipeline batch
+
+- **Status:** Proposed.
+- **Contexto e forças:** AS-01 a AS-06 exigem acesso a conteúdo e conta,
+	enquanto AS-06 exige treino diário. Disponibilidade do online, isolamento,
+	simplicidade e custo entram em tensão.
+- **Requisitos/cenários relacionados:** AS-01, AS-03, AS-04, AS-06;
+	ATAM-QS-06, ATAM-QS-07 e ATAM-QS-08.
+- **Alternativas:** compartilhar o mesmo fluxo; separar logicamente no mesmo
+	processo; separar em pipeline operacionalmente isolado.
+- **Decisão:** manter online e batch como responsabilidades separadas, com
+	isolamento de estado ativo e workspace de treino; adiar a topologia de
+	implantação.
+- **Consequências positivas:** reduz interferência e facilita falha, rollback e
+	observação independentes.
+- **Consequências negativas:** aumenta coordenação, armazenamento e custo
+	potencial.
+- **Riscos:** isolamento lógico insuficiente ou custo incompatível com volume.
+- **Evidências/experimentos necessários:** teste de carga online durante treino;
+	comparação de custo compartilhado versus isolado.
+- **Condição de revisão:** novos volumes, SLOs, orçamento ou consumidor do
+	modelo alterarem o trade-off.
+
+### ADR-ATAM-02 — Não promover candidato sem gate e preservar rollback
+
+- **Status:** Accepted as invariant; implementation mechanism Proposed.
+- **Contexto e forças:** AS-06 exige que o batch não derrube o online nem
+	promova candidato sem validação. Segurança operacional e continuidade pesam
+	mais que velocidade de publicação.
+- **Requisitos/cenários relacionados:** AS-06; ATAM-QS-08 e ATAM-QS-09.
+- **Alternativas:** promoção direta; promoção após validação; promoção gradual
+	com alias/versionamento.
+- **Decisão:** somente candidato aprovado pode ser promovido; a versão ativa
+	anterior deve permanecer recuperável.
+- **Consequências positivas:** reduz risco de modelo inválido e habilita
+	rollback.
+- **Consequências negativas:** atraso ou ausência de atualização quando o gate
+	falhar; necessidade de retenção adicional.
+- **Riscos:** gate mal definido ou rollback não testado.
+- **Evidências/experimentos necessários:** testes de candidato reprovado,
+	promoção repetida e rollback sob falha.
+- **Condição de revisão:** definição de métricas, contrato de inferência ou
+	requisito de rollout mudar.
+
+### ADR-ATAM-03 — Checkpoint somente após sucesso completo
+
+- **Status:** Accepted as invariant; atomicity mechanism Proposed.
+- **Contexto e forças:** AS-06 exige uso incremental e não reutilização indevida;
+	integridade de dados entra em tensão com múltiplos armazenamentos.
+- **Requisitos/cenários relacionados:** AS-06; ATAM-QS-07, ATAM-QS-09 e
+	ATAM-QS-10.
+- **Alternativas:** avançar checkpoint após leitura; após treino; após gate;
+	após promoção e auditoria; usar protocolo de reconciliação.
+- **Decisão:** somente avançar para `limiteCandidato` após treino, gate aprovado,
+	promoção concluída e auditoria registrada; transação única ou equivalente
+	reconciliável é obrigatória.
+- **Consequências positivas:** evita declarar dados processados antes do
+	sucesso completo.
+- **Consequências negativas:** pode repetir trabalho e exigir reconciliação.
+- **Riscos:** promoção sem checkpoint ou checkpoint sem promoção.
+- **Evidências/experimentos necessários:** injeção de falhas em cada transição e
+	recuperação automática/manual demonstrável.
+- **Condição de revisão:** tecnologia de persistência e topologia serem definidas.
+
+### ADR-ATAM-04 — Idempotência, deduplicação e lock antes do checkpoint
+
+- **Status:** Proposed.
+- **Contexto e forças:** reexecução é necessária para falhas, mas duplicatas e
+	concorrência não podem alterar o modelo ativo ou avançar estado duas vezes.
+- **Requisitos/cenários relacionados:** AS-06; ATAM-QS-06, ATAM-QS-07 e
+	ATAM-QS-10.
+- **Alternativas:** confiar em execução única; deduplicar apenas na origem;
+	controlar no batch com identidade de execução/lote; usar lock distribuído.
+- **Decisão:** cada execução terá identidade; o lote terá identidade derivada da
+	origem e janela; o lock será adquirido antes da leitura do checkpoint; ações
+	repetidas devem ser no-op ou rejeitadas com auditoria.
+- **Consequências positivas:** reprocessamento controlado e menor risco de
+	promoção duplicada.
+- **Consequências negativas:** exige estado operacional, chaves de domínio e
+	tratamento de lock preso.
+- **Riscos:** chave inadequada, relógios inconsistentes e lock sem fencing.
+- **Evidências/experimentos necessários:** execução concorrente, duplicatas,
+	retry após timeout e reinício do executor.
+- **Condição de revisão:** origem, número de executores ou semântica de falha
+	forem conhecidos.
+
+### ADR-ATAM-05 — Lote imutável com linhagem e artefatos reproduzíveis
+
+- **Status:** Proposed.
+- **Contexto e forças:** AS-06 exige dados novos; qualidade, auditoria,
+	reprodutibilidade e custo de armazenamento entram em tensão.
+- **Requisitos/cenários relacionados:** AS-06; ATAM-QS-07 e ATAM-QS-10.
+- **Alternativas:** reler a origem a cada retry; copiar lote imutável; armazenar
+	apenas watermark e metadados.
+- **Decisão:** o lote aceito deve ser imutável durante a execução e carregar
+	origem, janela, esquema, transformações, `runId` e referência do candidato;
+	código, dependências e configuração também devem ser identificáveis.
+- **Consequências positivas:** auditoria e reexecução confiáveis.
+- **Consequências negativas:** custo de armazenamento e necessidade de retenção.
+- **Riscos:** dados pessoais persistidos além da finalidade ou artefatos não
+	reproduzíveis por dependência externa.
+- **Evidências/experimentos necessários:** repetir treino com o mesmo lote e
+	comparar artefato, métricas e linhagem.
+- **Condição de revisão:** política LGPD, volume ou requisito de auditoria mudar.
+
+### ADR-SEC-01 — Autorização premium sem fail-open presumido
+
+- **Status:** Proposed.
+- **Contexto e forças:** AS-03 exige acesso do assinante válido; AS-05 exige
+	proteção da conta. Disponibilidade e prevenção de acesso indevido entram em
+	conflito quando a fonte não responde.
+- **Requisitos/cenários relacionados:** AS-02, AS-03, AS-05; ATAM-QS-02,
+	ATAM-QS-03 e ATAM-QS-04.
+- **Alternativas:** fail-open; fail-closed; cache local com TTL; réplica de
+	assinatura com política de consistência.
+- **Decisão:** nenhuma política definitiva é aprovada; a implementação deve
+	bloquear concessão implícita até fonte, estados, cache e tolerância serem
+	definidos.
+- **Consequências positivas:** evita transformar indisponibilidade em acesso
+	indevido.
+- **Consequências negativas:** pode interromper acesso legítimo.
+- **Riscos:** frustração de assinantes e inconsistência temporal.
+- **Evidências/experimentos necessários:** simular indisponibilidade, atraso,
+	revogação e renovação da fonte.
+- **Condição de revisão:** contrato da assinatura e política de negócio aprovados.
+
+### ADR-ML-01 — Contrato de dados novos e gate de modelo antes do treino produtivo
+
+- **Status:** Proposed.
+- **Contexto e forças:** AS-06 é obrigatório, mas origem, novidade, algoritmo,
+	métrica e consumidor do modelo não foram definidos.
+- **Requisitos/cenários relacionados:** AS-06; ATAM-QS-07, ATAM-QS-08 e
+	ATAM-QS-10.
+- **Alternativas:** escolher watermark temporal agora; escolher sequência agora;
+	executar experimento com a origem real antes da decisão.
+- **Decisão:** não escolher a semântica do watermark nem autorizar treino
+	produtivo antes de validar origem, contrato de lote, métricas, baseline,
+	consumidor e critérios de promoção.
+- **Consequências positivas:** evita pipeline correto para um problema não
+	especificado.
+- **Consequências negativas:** retarda a implementação do batch.
+- **Riscos:** pressão para transformar hipótese em requisito.
+- **Evidências/experimentos necessários:** profiling da origem, teste de dados
+	tardios, reprocessamento, baseline e validação temporal/histórica comparativa.
+- **Condição de revisão:** requisitos ML e consumidor do modelo confirmados.
+
+### ADR-SRE-01 — Retry limitado, observável e associado à execução
+
+- **Status:** Proposed.
+- **Contexto e forças:** falhas transitórias devem ser recuperáveis, mas retry
+	infinito ameaça a janela diária e pode duplicar efeitos.
+- **Requisitos/cenários relacionados:** AS-06; ATAM-QS-06, ATAM-QS-07 e
+	ATAM-QS-09.
+- **Alternativas:** nenhum retry; retry local; retry na próxima execução;
+	orquestração externa com estado persistente.
+- **Decisão:** retry deve ser limitado, associado a `runId` e etapa, possuir
+	timeout e ser seguro por idempotência; a modalidade final permanece aberta.
+- **Consequências positivas:** reduz falhas transitórias sem aceitar loops
+	infinitos.
+- **Consequências negativas:** pode deixar trabalho para a próxima janela.
+- **Riscos:** backoff inadequado ou dependência indisponível prolongada.
+- **Evidências/experimentos necessários:** matriz de falhas, duração e carga da
+	janela com cada política.
+- **Condição de revisão:** SLO, janela, volume e comportamento das dependências
+	definidos.
+
+### ADR-FIN-01 — Isolamento e custo como decisão baseada em experimento
+
+- **Status:** Proposed.
+- **Contexto e forças:** isolamento protege acesso online; compartilhamento pode
+	reduzir custo. Não há volume, orçamento ou SLO.
+- **Requisitos/cenários relacionados:** AS-01, AS-03, AS-06 e AS-07;
+	ATAM-QS-06 e ATAM-QS-07.
+- **Alternativas:** computação compartilhada; computação isolada; isolamento
+	progressivo por carga e prioridade.
+- **Decisão:** não fixar topologia de custo; medir interferência, capacidade,
+	armazenamento e recuperação antes de escolher.
+- **Consequências positivas:** evita sobrearquitetura e decisão sem dados.
+- **Consequências negativas:** adia orçamento e desenho operacional definitivo.
+- **Riscos:** experimento pequeno não representar o crescimento real.
+- **Evidências/experimentos necessários:** teste de carga online durante treino,
+	projeção de retenção e custo por execução.
+- **Condição de revisão:** volumes, orçamento, SLO e crescimento aprovados.
+
+## 23. Requisitos sem cobertura e decisões sem requisito
+
+### 23.1 Requisitos sem cobertura suficiente
+
+Os requisitos abaixo têm alguma responsabilidade ou invariante associada, mas
+não têm cobertura demonstrável nem decisão fechada:
+
+- **AS-01:** formato, busca, paginação, desempenho e modelo de conteúdo.
+- **AS-02:** regra de classificação e comunicação de conteúdo gratuito/premium.
+- **AS-03:** fonte, estados, consistência e comportamento de falha da assinatura.
+- **AS-04:** protocolo, sessão, recuperação, limites e canais de identidade.
+- **AS-05:** controles de segurança, métricas, retenção e resposta a abuso.
+- **AS-06:** horário/fuso, definição de dado novo, origem, treino, duração,
+	retry, modelo, gate, retenção e recuperação.
+- **AS-07:** justificativa, limites e critérios de adequação da stack.
+
+### 23.2 Decisões ou propostas sem requisito suficiente
+
+- Modelo ativo, registry, publisher e rollback, pois o consumidor do modelo não
+	está confirmado.
+- `runId`, `candidateVersion`, watermark e limite candidato como identificadores
+	definitivos, pois são convenções propostas.
+- Lock distribuído, alias versionado, armazenamento dedicado e qualquer serviço
+	externo, pois não há volume, topologia ou requisito que os exija.
+- LGPD detalhada, observabilidade quantitativa e isolamento computacional como
+	metas, pois são preocupações e não RNFs aprovados.
+- Monólito modular ou múltiplos serviços, pois o modo de implantação não foi
+	decidido.
+
+## 24. Suposições, perguntas abertas e riscos
+
+### 24.1 Suposições mantidas
+
+- O treinamento pode produzir um modelo versionável, caso uma funcionalidade
+	real o consuma.
+- A origem fornece dados suficientes para estabelecer uma noção de novidade,
+	ainda não definida.
+- Um lote imutável e uma referência ativa são viáveis, ainda sem tecnologia
+	escolhida.
+- Online e batch podem compartilhar PostgreSQL apenas se a carga, isolamento e
+	consistência forem comprovados.
+
+### 24.2 Perguntas abertas consolidadas
+
+1. Quais são os requisitos funcionais e não funcionais formais?
+2. Qual é a fonte de assinatura, seus estados e sua política de indisponibilidade?
+3. Qual protocolo de identidade, sessão e recuperação será utilizado?
+4. Qual funcionalidade online consome o modelo?
+5. Qual é a origem dos dados novos e seu campo de ordenação?
+6. Como serão tratados dados tardios, duplicatas e reprocessamento?
+7. Quais métricas, baseline e limiares definem o gate?
+8. Qual é o horário, fuso, duração máxima e SLO do batch?
+9. Qual mecanismo garante atomicidade ou reconciliação entre promoção e
+	 checkpoint?
+10. Quais são volumes, crescimento, orçamento, retenção e responsáveis por
+		alertas?
+11. Quais dados pessoais entram no treinamento e qual é a base legal?
+12. Quais critérios justificam Java 21, Spring Boot 3.x, PostgreSQL e Maven?
+
+### 24.3 Riscos aceitos provisoriamente
+
+Estes riscos podem permanecer durante descoberta ou prototipação controlada,
+mas não para produção:
+
+- stack sem ADR de justificativa;
+- topologia online/batch ainda aberta;
+- ausência de métricas quantitativas;
+- registry e modelo ativo ainda condicionais;
+- plano de testes ainda incompleto.
+
+### 24.4 Riscos residuais
+
+Mesmo após as decisões propostas, permanecerão riscos que exigem monitoramento:
+
+- atraso ou alteração sem aviso da fonte de assinatura;
+- dados tardios ou fora de ordem na origem;
+- degradação de métricas do modelo após promoção;
+- crescimento de storage e custo de retenção;
+- indisponibilidade prolongada durante a janela diária;
+- exposição indevida em logs, auditoria ou artefatos de treino;
+- falhas de reconciliação entre sistemas com estados separados.
+
+## 25. Matriz requisito → decisão → componente → evidência
+
+| Requisito | Decisão/ADR | Componente ou responsabilidade | Evidência necessária |
+| --- | --- | --- | --- |
+| AS-01 Conteúdo esportivo consultável | ADR-ATAM-01; decisão de conteúdo ainda aberta | API Online / Serviço de Conteúdo / Banco Operacional | Testes de consulta de informações, jogos, resultados e matérias; contrato de API. |
+| AS-02 Diferenciar gratuito e premium | ADR-SEC-01; regra de classificação aberta | Content Reader / Subscription Checker | Testes com conteúdo gratuito, premium e resposta sem assinatura. |
+| AS-03 Premium para assinatura válida | ADR-SEC-01 | Serviço de Assinatura e Autorização / Fonte de Assinatura | Contrato da fonte; testes de estados, revogação, atraso e indisponibilidade. |
+| AS-04 Login, sessão e recuperação | ADR-SEC-01; decisão de identidade ainda aberta | Serviço de Identidade e Sessão / Session Manager | Cenários de login, renovação, expiração, recuperação e abuso. |
+| AS-05 Proteger conta | ADR-SEC-01; controles LGPD pendentes | Identity, Access Coordinator, Auditoria | Threat model, matriz de acesso, testes de segurança e auditoria sem segredos. |
+| AS-06 Selecionar somente dados novos | ADR-ATAM-03, ADR-ATAM-04, ADR-ML-01 | Leitor, Orquestrador, Checkpoint e Auditoria | Experimento com watermark, dados tardios, duplicatas e reprocessamento. |
+| AS-06 Executar diariamente | ADR-SRE-01 | Agendador / Orquestrador Batch | SLO, fuso, teste de janela, timeout, retry e alerta. |
+| AS-06 Treinar/re-treinar com gate | ADR-ATAM-02, ADR-ML-01 | Trainer / Validador de Candidato | Baseline, métricas, limiares, evidência versionada e teste de reprovação. |
+| AS-06 Não contaminar online | ADR-ATAM-01, ADR-FIN-01 | API Online / Pipeline Batch / Modelo Ativo | Teste de carga e falha do batch durante acesso online. |
+| AS-07 Stack declarada | Nenhum ADR de justificativa ainda | API / PostgreSQL / Maven / runtime Java | ADR de stack, prova de conceito e critérios de operação. |
+
+## 26. Próximos experimentos e gate de auditoria
+
+### 26.1 Experimentos prioritários
+
+1. **Contrato de assinatura:** simular estados válidos, inválidos, atraso,
+	 revogação e indisponibilidade; registrar decisão de fail-open/fail-closed ou
+	 cache.
+2. **Incrementalidade:** executar duas janelas com duplicatas, dados tardios e
+	 falhas em cada etapa; verificar watermark, lote, deduplicação e auditoria.
+3. **Atomicidade/reconciliação:** interromper o processo após promoção e após
+	 escrita de checkpoint; demonstrar que nenhuma execução perde dados ou promove
+	 duas vezes.
+4. **Reprodutibilidade ML:** repetir o treino com o mesmo lote e identificar
+	 dados, código, dependências, configuração, candidato e métricas.
+5. **Falhas e recuperação:** testar timeout, retry, lock preso, reinício do
+	 executor, cancelamento e execução concorrente.
+6. **Online versus batch:** medir latência, disponibilidade e consumo com o
+	 treinamento compartilhando e isolando recursos.
+7. **Segurança e LGPD:** mapear dados pessoais, perfis, logs, retenção e descarte;
+	 executar testes de acesso positivo e negativo.
+8. **Stack:** criar uma prova de conceito mínima na stack AS-07 e registrar
+	 capacidade, observabilidade, operação e custo.
+
+### 26.2 Critério do próximo gate
+
+O próximo gate só deve ser considerado **GO** quando:
+
+- AS-01 a AS-07 tiverem requisitos e critérios de aceitação rastreáveis;
+- os ADRs `Proposed` críticos tiverem decisão aprovada ou experimento com
+	resultado aceitável;
+- a matriz da seção 25 não contiver requisitos críticos sem evidência planejada;
+- os diagramas C4 e sequências forem atualizados para refletir a interpretação
+	da seção 21.8;
+- `docs/plano-de-teste.md` deixar de estar integralmente em `TODO`;
+- riscos residuais tiverem responsável, sinal de monitoramento e estratégia de
+	resposta.
+
+### 26.3 Leitura final de auditoria
+
+Uma pessoa nova deve localizar a origem de cada decisão seguindo esta ordem:
+
+1. requisitos e origem em AS-01 a AS-07, nas seções 3 e 4;
+2. atributos e drivers nas seções 5 e 6;
+3. responsabilidades e interfaces nas seções 11 e 12;
+4. invariantes e falhas nas seções 14 a 16;
+5. riscos e perguntas na seção 9 e na avaliação ATAM da seção 20;
+6. interpretação corrigida e discordâncias na seção 21;
+7. decisão, trade-offs, consequências e evidências nos ADRs da seção 22;
+8. lacunas, riscos e cobertura na seção 23, seção 24 e matriz da seção 25;
+9. validação empírica e critérios de aprovação na seção 26.
+
+Se uma decisão não puder ser encontrada nessa cadeia, ela não deve ser tratada
+como decisão arquitetural aprovada; deve ser registrada como suposição ou
+pergunta aberta.
